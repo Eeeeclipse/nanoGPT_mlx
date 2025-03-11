@@ -109,7 +109,7 @@ class CausalSelfAttention(nn.Module):
         # manual implementation of attention
         att = (query @ key.transpose(0, 1, 3, 2)) * (1.0 / math.sqrt(key.shape[3]))
         mask = mask.reshape(1, 1, T, T)
-        att = mx.where(mask[:,:,:T,:T] == 0, att, float('-1e9'))
+        att = mx.where(mask[:,:,:T,:T] == 0, float('-1e9'), att)
         # y = att @ value # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
         att = mx.softmax(att.astype(mx.float32), axis=-1).astype(att.dtype)
         att = self.attn_dropout(att)
@@ -251,10 +251,7 @@ class GPT(nn.Module):
         Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
         the sequence max_new_tokens times, feeding the predictions back into the model each time.
         Most likely you'll want to make sure to be in model.eval() mode of operation for this.
-        """
-        # Initialize the initial sequence context (idx)
-        idx = mx.zeros((1, 1), dtype=mx.int64)
-        
+        """        
         for _ in range(max_new_tokens):
             # if the sequence context is growing too long we must crop it at block_size
             # idx_cond = idx if idx[0].shape[1] <= self.config.block_size else idx[:, -self.config.block_size:]
@@ -268,23 +265,8 @@ class GPT(nn.Module):
 
             # optionally crop the logits to only the top k options
             if top_k is not None:
-                v, _ = custom_topk(logits, min(top_k, logits.shape[-1]))
-
-                v_shape = v.shape
-
-                # Compute the index of the last element along the second dimension of v
-                last_index = v_shape[1] - 1
-
-                # Use MLX.take to extract the last element along the second dimension of v
-                last_element = mx.take(v, mx.array([last_index]))
-
-                # Expand the last element to match the shape of logits for broadcasting
-                v_last_expanded = mx.expand_dims(last_element, axis=1)
-
-                # Replace values with -1e9 where mask is True
-                mask = logits < v_last_expanded
-                inf_tensor = mx.ones_like(logits) * float('-1e9')
-                logits = (mask * logits) + ((1 - mask) * inf_tensor)
+                v = mx.sort(mx.topk(logits, min(top_k, logits.shape[-1])))[...,::-1]
+                logits = mx.where(logits < v[:, [-1]], -float('Inf'), logits)
 
             # apply softmax to convert logits to (normalized) probabilities
             probs = mx.softmax(logits)
